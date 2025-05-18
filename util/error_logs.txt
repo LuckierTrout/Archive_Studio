@@ -1,0 +1,41 @@
+
+2025-05-16 13:00:06 [ERROR]: API Error during processing for index 0, job HTR - Additional Info: module 'google.generativeai' has no attribute 'Client'
+Stack trace:
+Traceback (most recent call last):
+  File "/Users/christianlee/Archive_Studio/util/AIFunctions.py", line 40, in process_api_request
+    return await self.app.api_handler.route_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/christianlee/Archive_Studio/util/APIHandler.py", line 82, in route_api_call
+    return await self.handle_gemini_call(system_prompt, user_prompt, temp,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/christianlee/Archive_Studio/util/APIHandler.py", line 202, in handle_gemini_call
+    client = genai_client.Client(api_key=self.google_api_key)
+             ^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'google.generativeai' has no attribute 'Client'
+2025-05-16 13:00:06 [ERROR]: API returned error for index 0, job HTR
+2025-05-16 13:09:30.149294: CRITICAL: Critical error in main application scope: module 'google.genai' has no attribute 'configure'
+Traceback (most recent call last):
+  File "/Users/christianlee/Archive_Studio/ArchiveStudio.py", line 2613, in <module>
+    app = App()
+          ^^^^^
+  File "/Users/christianlee/Archive_Studio/ArchiveStudio.py", line 234, in __init__
+    self.api_handler = APIHandler(
+                       ^^^^^^^^^^^
+  File "/Users/christianlee/Archive_Studio/util/APIHandler.py", line 36, in __init__
+    genai_client.configure(api_key=self.google_api_key)
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'google.genai' has no attribute 'configure'
+
+2025-05-16 13:09:39.212998: CRITICAL: Critical error in main application scope: module 'google.genai' has no attribute 'configure'
+Traceback (most recent call last):
+  File "/Users/christianlee/Archive_Studio/ArchiveStudio.py", line 2613, in <module>
+    app = App()
+          ^^^^^
+  File "/Users/christianlee/Archive_Studio/ArchiveStudio.py", line 234, in __init__
+    self.api_handler = APIHandler(
+                       ^^^^^^^^^^^
+  File "/Users/christianlee/Archive_Studio/util/APIHandler.py", line 36, in __init__
+    genai_client.configure(api_key=self.google_api_key)
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'google.genai' has no attribute 'configure'
+
