@@ -18,8 +18,8 @@ from anthropic import AsyncAnthropic
 import anthropic
 
 # Google API
-from google import genai as genai_client  
-from google.genai import types 
+import google.generativeai as genai_client
+from google.generativeai import types
 
 # Import ErrorLogger
 from util.ErrorLogger import log_error
@@ -30,12 +30,6 @@ class APIHandler:
         self.anthropic_api_key = anthropic_api_key
         self.google_api_key = google_api_key
         self.app = app  # Reference to main app for error logging
-
-        import openai
-        import anthropic
-        openai.api_key    = self.openai_api_key
-        anthropic.api_key = self.anthropic_api_key
-
         
     def log_error(self, error_message, additional_info=None):
         """Log errors using ErrorLogger if app is available, otherwise silently continue"""
@@ -205,62 +199,82 @@ class APIHandler:
                                 is_base64=True, formatting_function=False, api_timeout=120.0,
                                 job_type=None, required_headers=None):
         """Handle API calls to Google Gemini models"""
-        client = genai_client.Client(api_key=self.google_api_key)
+        
+        # 1. Configure the API key 
+        genai_client.configure(api_key=self.google_api_key) 
         
         populated_user_prompt = user_prompt if formatting_function else user_prompt.format(text_to_process=text_to_process)
         
-        generate_content_config = types.GenerateContentConfig(
+        # 2. Define GenerationConfig using google.generativeai.types
+        generation_config = types.GenerationConfig( # Ensure 'types' is imported as 'from google.generativeai import types'
             temperature=temp,
-            top_p=0.95,
-            top_k=40,
-            max_output_tokens=8192,
-            response_mime_type="text/plain",
-            system_instruction=[
-                types.Part.from_text(text=system_prompt),
-            ],
+            top_p=0.95, 
+            top_k=40,   
+            max_output_tokens=8192, 
         )
+
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
 
         max_retries = 5 if job_type == "Metadata" else 3
         retries = 0
         
+        current_generation_config = generation_config # Use a mutable copy for retries
+
         while retries < max_retries:
             try:
-                parts = []
+                parts = [] 
                 
-                # Handle image data
+                # Image data handling 
                 if image_data:
-                    if isinstance(image_data, (str, Path)):
-                        uploaded_file = client.files.upload(file=image_data)
-                        parts.append(types.Part.from_uri(
-                            file_uri=uploaded_file.uri,
-                            mime_type="image/jpeg"
-                        ))
-                    else:
-                        for img_path, label in image_data:
+                    if isinstance(image_data, (str, Path)): 
+                        try:
+                            # Ensure Path objects are converted to string for Image.open
+                            img_path_str = str(image_data) if isinstance(image_data, Path) else image_data
+                            img = Image.open(img_path_str)
+                            parts.append(img) 
+                        except Exception as e:
+                            self.log_error(f"Failed to open image for Gemini: {image_data}", str(e))
+                    elif isinstance(image_data, list): 
+                        for img_item, label in image_data:
                             if label:
-                                parts.append(types.Part.from_text(text=label))
-                            uploaded_file = client.files.upload(file=img_path)
-                            parts.append(types.Part.from_uri(
-                                file_uri=uploaded_file.uri,
-                                mime_type="image/jpeg"
-                            ))
+                                parts.append(label) 
+                            try:
+                                if isinstance(img_item, str) and os.path.exists(img_item):
+                                    img = Image.open(img_item)
+                                    parts.append(img)
+                                elif isinstance(img_item, Image.Image): 
+                                    parts.append(img_item)
+                                # Add handling for base64 encoded images if necessary for Gemini
+                                elif isinstance(img_item, str) and is_base64: # Assuming img_item could be base64 string
+                                    try:
+                                        img_bytes = base64.b64decode(img_item)
+                                        img = Image.open(io.BytesIO(img_bytes)) # type: ignore
+                                        parts.append(img)
+                                    except Exception as e_b64:
+                                        self.log_error(f"Failed to decode base64 image for Gemini: {label or 'untitled'}", str(e_b64))
+                            except Exception as e:
+                                self.log_error(f"Failed to process image for Gemini: {img_item}", str(e))
                 
-                parts.append(types.Part.from_text(text=populated_user_prompt))
-                contents = [types.Content(role="user", parts=parts)]
+                parts.append(populated_user_prompt) 
 
-                # Print debug info for Gemini API call
-                print("\n[GEMINI API CALL]")
-                print(f"Model: {engine}")
-                print(f"System Prompt: {system_prompt}")
-                print(f"User Prompt: {populated_user_prompt}")
+                # 3. Initialize the model using GenerativeModel
+                model = genai_client.GenerativeModel(
+                    model_name=engine,
+                    generation_config=current_generation_config, # Use the potentially modified config for retries
+                    safety_settings=safety_settings,
+                    system_instruction=system_prompt 
+                )
+                
+                # 4. Call generate_content_async on the model instance
+                response = await model.generate_content_async(parts, stream=True)
 
-                # Stream response and collect text
                 response_text = ""
-                for chunk in client.models.generate_content_stream(
-                    model=engine,
-                    contents=contents,
-                    config=generate_content_config,
-                ):
+                async for chunk in response: 
                     if hasattr(chunk, 'text') and chunk.text is not None:
                         response_text += chunk.text
                 
@@ -270,8 +284,14 @@ class APIHandler:
                 
                 if validation_result[0] == "Error" and retries < max_retries - 1:
                     if job_type == "Metadata":
-                        generate_content_config.temperature = min(0.9, float(temp) + (retries * 0.1))
-                    
+                        # Adjust temp in a new config object for the next retry
+                        new_temp = min(0.9, float(current_generation_config.temperature if current_generation_config.temperature is not None else temp) + ((retries + 1) * 0.1))
+                        current_generation_config = types.GenerationConfig(
+                            temperature=new_temp,
+                            top_p=current_generation_config.top_p,
+                            top_k=current_generation_config.top_k,
+                            max_output_tokens=current_generation_config.max_output_tokens
+                        )
                     retries += 1
                     await asyncio.sleep(1 * (1.5 ** retries))
                     continue
@@ -279,12 +299,17 @@ class APIHandler:
                 return validation_result
 
             except Exception as e:
-                print(f"[Gemini API Exception]: {e}")
+                if "API_KEY_INVALID" in str(e) or "API key not valid" in str(e):
+                     self.log_error(f"Gemini API Key is invalid or not configured properly for index {index}.", f"{str(e)}")
+                     return "Error: Invalid API Key", index
+
+                print(f"[Gemini API Exception]: {e}") # Keep this for immediate feedback
                 self.log_error(f"Gemini API Error with {engine} for index {index}", f"{str(e)}")
                 retries += 1
                 if retries == max_retries:
                     return "Error", index
                 await asyncio.sleep(1 * (1.5 ** retries))
+        return "Error", index # Should be unreachable if loop exits normally
     
     async def handle_claude_call(self, system_prompt, user_prompt, temp, image_data, 
                                 text_to_process, val_text, engine, index, 
